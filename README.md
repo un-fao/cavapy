@@ -112,6 +112,7 @@ togo = cavapy.get_climate_data(
 )
 ```
 
+
 ### 3) ERA5 observations only
 
 ```python
