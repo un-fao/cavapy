@@ -20,16 +20,32 @@
 
 ## What is cavapy?
 
-`cavapy` is a Python package built for climate-impact workflows where you need reliable data access without handling massive raw NetCDF archives manually.
+Working with CORDEX-CORE climate projections normally means downloading terabytes of raw NetCDF files, reprojecting from rotated polar coordinates to regular lat/lon, writing boilerplate to handle non-Gregorian calendars, converting units, subsetting grids, wrangling multi-model ensembles, and layering bias correction on top. All before you can run a single analysis.
 
-It is part of the CAVA (Climate and Agriculture Risk Visualization and Assessment) ecosystem and focuses on:
+`cavapy` collapses all of that into one function call.
 
-- Fast access to CORDEX-CORE simulations
-- Access to ERA5 observations
-- Optional bias correction and calendar harmonization
-- Clean integration with downstream hydrology, agronomy, and risk-analysis pipelines
+It streams only the spatial slice you need over OPeNDAP (no local archive required) and returns analysis-ready `xarray.DataArray` objects with consistent units, a standard Gregorian calendar, and optional bias correction already applied.
 
-Project context: [CAVA overview](https://risk-team.github.io/CAVAanalytics/articles/CAVA.html)
+It is part of the [CAVA](https://risk-team.github.io/CAVAanalytics/articles/CAVA.html) (Climate and Agriculture Risk Visualization and Assessment) ecosystem, a joint initiative of FAO, the University of Cantabria, the University of Cape Town, and Predictia.
+
+---
+
+## What gets handled automatically
+
+A single `get_climate_data()` call orchestrates a full pipeline:
+
+| Step | What happens |
+| --- | --- |
+| **Inventory lookup** | Resolves the correct OPeNDAP URL(s) for your GCM/RCM/RCP/domain combination from a live THREDDS inventory |
+| **Spatial subsetting** | Streams only the grid cells inside your country or bounding box — no full-file downloads |
+| **Country → bbox** | Converts a country name to a precise bounding box using Natural Earth shapefiles |
+| **Unit conversion** | K → °C for temperature; kg m⁻² s⁻¹ → mm/day for precipitation; J/m² → W/m² for solar radiation; 10 m → 2 m for wind speed |
+| **Regridding** | CORDEX outputs are natively in rotated polar coordinates; the data served here has already been regridded to a regular lat/lon grid, so standard spatial operations work out of the box |
+| **Calendar harmonization** | Converts 360-day and other non-Gregorian CORDEX calendars to Gregorian, filling gaps with NaN |
+| **Parallelization** | Variables are fetched in parallel processes; within each process, threaded downloads handle multi-file retrieval |
+| **Fault tolerance** | OPeNDAP connections retry up to 3 times with backoff; C-level noise is suppressed on intermediate attempts |
+| **Bias correction** | ERA5 is automatically fetched as the reference; EQM is trained and applied — no external tools needed |
+| **Domain validation** | If your bounding box falls outside the chosen CORDEX domain, a corrected domain is suggested |
 
 ---
 
@@ -38,30 +54,32 @@ Project context: [CAVA overview](https://risk-team.github.io/CAVAanalytics/artic
 ### Sources
 
 - CORDEX-CORE regional climate simulations (25 km)
-- ERA5 reanalysis (used directly and for optional correction workflows)
+- ERA5 reanalysis (used directly and as the reference for bias correction)
 
-Data is hosted on the University of Cantabria THREDDS infrastructure within the CAVA initiative (FAO, University of Cantabria, University of Cape Town, Predictia).
+Data is hosted on the University of Cantabria THREDDS infrastructure.
 
 ### Available datasets
 
-- `CORDEX-CORE`: original model outputs
-- `CORDEX-CORE-BC`: pre-bias-corrected outputs using ISIMIP methodology
+- **`CORDEX-CORE`** — original model outputs. Use this when you want raw projections or when you will apply your own post-processing.
+- **`CORDEX-CORE-BC`** — pre-bias-corrected outputs. The full CORDEX-CORE archive was corrected against ERA5 reanalysis using the [ISIMIP3 methodology](https://www.isimip.org/documents/413/ISIMIP3b_bias_adjustment_fact_sheet_GCMs_v2.pdf) (trend-preserving quantile mapping). Use this dataset when you need a consistent, ready-to-use ensemble with no additional processing.
 
 ### Available variables
 
-- `tasmax`: daily maximum temperature (degC)
-- `tasmin`: daily minimum temperature (degC)
-- `pr`: daily precipitation (mm)
-- `hurs`: daily relative humidity (%)
-- `sfcWind`: daily wind speed at 2 m (m/s)
-- `rsds`: daily solar radiation (W/m2)
+| Variable | Description | Units |
+| --- | --- | --- |
+| `tasmax` | Daily maximum temperature | °C |
+| `tasmin` | Daily minimum temperature | °C |
+| `pr` | Daily precipitation | mm/day |
+| `hurs` | Daily relative humidity | % |
+| `sfcWind` | Daily wind speed at 2 m | m/s |
+| `rsds` | Daily solar radiation | W/m² |
 
 ### Supported domains and scenario/model options
 
-- Domains: `NAM-22`, `EUR-22`, `AFR-22`, `EAS-22`, `SEA-22`, `WAS-22`, `AUS-22`, `SAM-22`, `CAM-22`
-- RCPs: `rcp26`, `rcp85`
-- GCMs: `MOHC`, `MPI`, `NCC`
-- RCMs: `REMO`, `Reg`
+- **Domains**: `NAM-22`, `EUR-22`, `AFR-22`, `EAS-22`, `SEA-22`, `WAS-22`, `AUS-22`, `SAM-22`, `CAM-22`
+- **RCPs**: `rcp26`, `rcp85`
+- **GCMs**: `MOHC`, `MPI`, `NCC`
+- **RCMs**: `REMO`, `Reg`
 
 ---
 
@@ -79,6 +97,8 @@ pip install cavapy
 
 ### 1) Pre-bias-corrected projections (recommended)
 
+Uses `CORDEX-CORE-BC`: the full CORDEX archive already corrected against ERA5 using the ISIMIP3 methodology. No further correction is applied at download time.
+
 ```python
 import cavapy
 
@@ -92,9 +112,12 @@ togo = cavapy.get_climate_data(
     years_up_to=2030,
     dataset="CORDEX-CORE-BC",
 )
+# Returns: {"tasmax": xr.DataArray, "pr": xr.DataArray}
 ```
 
 ### 2) Original CORDEX-CORE with on-the-fly bias correction
+
+When `bias_correction=True`, cavapy automatically fetches ERA5 for the historical period and applies **Empirical Quantile Mapping (EQM)** via [xsdba](https://xsdba.readthedocs.io). Historical bias correction uses leave-one-out cross-validation to avoid overfitting. Multiplicative scaling is applied for precipitation, wind, and radiation; additive for temperature and humidity. This is useful when you need custom period or region coverage beyond the pre-corrected archive.
 
 ```python
 import cavapy
@@ -111,7 +134,6 @@ togo = cavapy.get_climate_data(
     dataset="CORDEX-CORE",
 )
 ```
-
 
 ### 3) ERA5 observations only
 
@@ -132,6 +154,8 @@ era5 = cavapy.get_climate_data(
 
 ### Projections + historical baseline
 
+Setting `historical=True` fetches the 1980–2005 historical simulation run and concatenates it with the projection period, giving a continuous time series.
+
 ```python
 import cavapy
 
@@ -148,9 +172,9 @@ data = cavapy.get_climate_data(
 )
 ```
 
-### Multiple models and/or RCPs
+### Multi-model ensemble
 
-Pass lists (or `None`) to `rcp`, `gcm`, and `rcm`.
+Pass lists (or `None` for all) to `rcp`, `gcm`, and `rcm`. Invalid combinations for the domain are skipped automatically with a warning, rather than raising an error.
 
 ```python
 import cavapy
@@ -163,45 +187,51 @@ multi = cavapy.get_climate_data(
     rcm=["Reg", "REMO"],
     years_up_to=2030,
     historical=True,
+    dataset="CORDEX-CORE-BC",
 )
 ```
 
-Return shape for multi-combination requests:
+The return structure for multi-combination requests is a nested dict:
 
 ```python
 multi[rcp][f"{gcm}-{rcm}"][variable]  # -> xarray.DataArray
 ```
 
+### Custom bounding box
+
+```python
+import cavapy
+
+data = cavapy.get_climate_data(
+    country=None,
+    xlim=(30.0, 42.0),
+    ylim=(3.0, 15.0),
+    cordex_domain="AFR-22",
+    rcp="rcp85",
+    gcm="MPI",
+    rcm="REMO",
+    years_up_to=2050,
+    buffer=1,  # expand bbox by 1 degree on each side
+)
+```
+
 ---
 
-## Processing Pipeline
+## Parallelization
 
-`get_climate_data()` orchestrates:
+`get_climate_data()` uses two levels of concurrency:
 
-- Server-side access and subsetting via OPeNDAP
-- Parallel data retrieval
-- Unit conversions
-- Calendar conversion to Gregorian calendar
-- Optional empirical quantile mapping bias correction
-
-### Parallelization behavior
-
-- Single model/scenario combo: parallel across variables
-- Multiple combos: parallel across combo-variable tasks, capped globally
+- **Single model/scenario**: variables are processed in parallel across processes (default: one per variable), with threaded downloads inside each process
+- **Multiple models/scenarios**: combo × variable tasks are distributed across a global process pool (default cap: 6 processes); a live progress bar tracks completion
 - Sequential mode is used when `num_processes <= 1` or only one variable is requested
-- Default global cap for multi-combo execution: up to `6` processes
-- Inside each process, threaded downloads are used for fetch operations
 
 ---
 
 ## Plotting
 
-`cavapy` includes built-in plotting helpers:
+`cavapy` includes built-in plotting helpers that work directly on the returned DataArrays.
 
-- `plot_spatial_map()`
-- `plot_time_series()`
-
-### Spatial map example
+### Spatial map
 
 ```python
 import cavapy
@@ -216,11 +246,9 @@ fig = cavapy.plot_spatial_map(
 )
 ```
 
-<p align="center">
-  <img src="figures/spatial_map_temperature.png" alt="Spatial temperature map" width="700">
-</p>
+![Spatial temperature map](figures/spatial_map_temperature.png)
 
-### Time series example
+### Time series
 
 ```python
 fig = cavapy.plot_time_series(
@@ -233,18 +261,16 @@ fig = cavapy.plot_time_series(
 )
 ```
 
-<p align="center">
-  <img src="figures/time_series_precipitation.png" alt="Precipitation time series" width="700">
-</p>
+![Precipitation time series](figures/time_series_precipitation.png)
 
-If your primary goal is advanced visualization/reporting, see [CAVAanalytics](https://risk-team.github.io/CAVAanalytics/).
+For advanced visualization and reporting, see [CAVAanalytics](https://risk-team.github.io/CAVAanalytics/).
 
 ---
 
 ## Operational Notes
 
-- Check [GitHub issues](https://github.com/risk-team/cavapy/issues) for data server outages or announcement posts.
-- Set `CAVAPY_NO_ANNOUNCEMENTS=1` to disable startup announcements in scripts/production runs.
+- Check [GitHub issues](https://github.com/risk-team/cavapy/issues) for data server outages or announcements. cavapy fetches these automatically at startup.
+- Set `CAVAPY_NO_ANNOUNCEMENTS=1` to disable startup announcements in scripts or production runs.
 
 ---
 
@@ -252,4 +278,3 @@ If your primary goal is advanced visualization/reporting, see [CAVAanalytics](ht
 
 - License: [MIT](LICENSE)
 - Package metadata and build details: [pyproject.toml](pyproject.toml)
-
