@@ -27,6 +27,7 @@ logger.setLevel(logging.DEBUG)
 
 VARIABLES_MAP = {
     "pr": "tp",
+    "tas": "t2m",
     "tasmax": "t2mx",
     "tasmin": "t2mn",
     "hurs": "hurs",

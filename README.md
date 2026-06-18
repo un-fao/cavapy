@@ -67,6 +67,7 @@ Data is hosted on the University of Cantabria THREDDS infrastructure.
 
 | Variable | Description | Units |
 | --- | --- | --- |
+| `tas` | Daily mean temperature | °C |
 | `tasmax` | Daily maximum temperature | °C |
 | `tasmin` | Daily minimum temperature | °C |
 | `pr` | Daily precipitation | mm/day |
@@ -224,6 +225,36 @@ data = cavapy.get_climate_data(
 - **Single model/scenario**: variables are processed in parallel across processes (default: one per variable), with threaded downloads inside each process
 - **Multiple models/scenarios**: combo × variable tasks are distributed across a global process pool (default cap: 6 processes); a live progress bar tracks completion
 - Sequential mode is used when `num_processes <= 1` or only one variable is requested
+
+### macOS and Windows scripts
+
+On macOS and Windows, Python starts multiprocessing workers with the `spawn` method. This means each worker imports the script again before running its task. If `get_climate_data()` is called at the top level of a `.py` script, that import re-runs the same call while Python is still starting the worker process, which can raise a multiprocessing bootstrapping `RuntimeError`.
+
+When using multiple variables or multi-model requests in a script on macOS or Windows, put the call behind Python's standard multiprocessing entry-point guard:
+
+```python
+import cavapy
+
+
+def main():
+    togo = cavapy.get_climate_data(
+        country="Togo",
+        variables=["tasmax", "pr"],
+        cordex_domain="AFR-22",
+        rcp="rcp26",
+        gcm="MPI",
+        rcm="REMO",
+        years_up_to=2030,
+        dataset="CORDEX-CORE-BC",
+    )
+    return togo
+
+
+if __name__ == "__main__":
+    main()
+```
+
+For a quick unguarded script, use `num_processes=1` or request a single variable to run sequentially.
 
 ---
 
