@@ -26,6 +26,12 @@ from .cava_config import (
 from .cava_validation import _ensure_inventory_not_empty
 
 
+SPATIAL_COORDS = {
+    "longitude": "xlim",
+    "latitude": "ylim",
+}
+
+
 @contextmanager
 def _suppress_stderr_fd():
     """Temporarily redirect stderr to /dev/null (also silences C-level warnings)."""
@@ -44,6 +50,95 @@ def _suppress_stderr_fd():
     finally:
         os.dup2(saved_fd, stderr_fd)
         os.close(saved_fd)
+
+
+def _coordinate_slice(coord: xr.DataArray, bounds: tuple[float, float]) -> slice:
+    """Build a label slice matching the coordinate's native order."""
+    values = np.asarray(coord.values, dtype=float)
+    if values.ndim != 1:
+        raise ValueError(
+            f"Coordinate '{coord.name}' must be one-dimensional for spatial subsetting"
+        )
+    if values.size == 0:
+        raise ValueError(f"Coordinate '{coord.name}' is empty")
+
+    lower, upper = min(bounds), max(bounds)
+    if values.size == 1:
+        return slice(lower, upper)
+    diffs = np.diff(values)
+    if np.all(diffs >= 0):
+        return slice(lower, upper)
+    if not np.all(diffs <= 0):
+        raise ValueError(f"Coordinate '{coord.name}' must be monotonic")
+    return slice(upper, lower)
+
+
+def _nearest_coordinate_value(coord: xr.DataArray, bounds: tuple[float, float]) -> float:
+    """Return the coordinate value closest to the center of the requested bounds."""
+    values = np.asarray(coord.values, dtype=float)
+    if values.ndim != 1:
+        raise ValueError(
+            f"Coordinate '{coord.name}' must be one-dimensional for nearest selection"
+        )
+    if values.size == 0:
+        raise ValueError(f"Coordinate '{coord.name}' is empty")
+
+    center = (bounds[0] + bounds[1]) / 2
+    return float(values[np.abs(values - center).argmin()])
+
+
+def _empty_spatial_coords(data: xr.DataArray) -> list[str]:
+    """Return spatial coordinates whose selected dimension is empty."""
+    empty = []
+    for coord_name in SPATIAL_COORDS:
+        if coord_name not in data.coords:
+            raise ValueError(f"Missing coordinate '{coord_name}' after subsetting")
+        if coord_name in data.sizes:
+            size = data.sizes[coord_name]
+        else:
+            size = data.coords[coord_name].size
+        if size == 0:
+            empty.append(coord_name)
+    return empty
+
+
+def _select_spatial_subset(
+    data: xr.DataArray,
+    bbox: dict[str, tuple[float, float]],
+    log: logging.Logger,
+) -> xr.DataArray:
+    """Select bbox cells, falling back to nearest cells if the bbox is sub-grid."""
+    selectors = {
+        coord_name: _coordinate_slice(data[coord_name], bbox[bbox_key])
+        for coord_name, bbox_key in SPATIAL_COORDS.items()
+    }
+    subset = data.sel(selectors)
+    empty_coords = _empty_spatial_coords(subset)
+    if not empty_coords:
+        return subset
+
+    fallback_selectors = dict(selectors)
+    nearest_values = {}
+    for coord_name in empty_coords:
+        bbox_key = SPATIAL_COORDS[coord_name]
+        nearest_value = _nearest_coordinate_value(data[coord_name], bbox[bbox_key])
+        fallback_selectors[coord_name] = [nearest_value]
+        nearest_values[coord_name] = nearest_value
+
+    subset = data.sel(fallback_selectors)
+    still_empty = _empty_spatial_coords(subset)
+    if still_empty:
+        raise ValueError(
+            "Spatial subset is empty after nearest-neighbour fallback for "
+            f"{', '.join(still_empty)}. Requested bbox: {bbox}"
+        )
+
+    log.warning(
+        "Spatial bbox selected no cells for %s; using nearest coordinate value(s): %s",
+        ", ".join(empty_coords),
+        nearest_values,
+    )
+    return subset
 
 
 def process_worker(num_threads, **kwargs) -> xr.DataArray:
@@ -341,10 +436,7 @@ def _download_data(
 
             ds_var.coords["longitude"] = (ds_var.coords["longitude"] + 180) % 360 - 180
             ds_var = ds_var.sortby(ds_var.longitude)
-            ds_cropped = ds_var.sel(
-                longitude=slice(bbox["xlim"][0], bbox["xlim"][1]),
-                latitude=slice(bbox["ylim"][1], bbox["ylim"][0]),
-            )
+            ds_cropped = _select_spatial_subset(ds_var, bbox, log)
 
             # Unit conversion
             if var in ["t2mx", "t2mn", "t2m"]:
@@ -388,10 +480,7 @@ def _download_data(
                 raise ValueError(msg)
 
             log.info("Connection established")
-            ds_cropped = ds_var.sel(
-                longitude=slice(bbox["xlim"][0], bbox["xlim"][1]),
-                latitude=slice(bbox["ylim"][1], bbox["ylim"][0]),
-            )
+            ds_cropped = _select_spatial_subset(ds_var, bbox, log)
 
             # Unit conversion
             if variable in ["tas", "tasmax", "tasmin"]:
