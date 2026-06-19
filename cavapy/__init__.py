@@ -1,6 +1,11 @@
 """CAVA Python package for retrieving and visualizing climate data."""
 
-__version__ = "2.0.3"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("cavapy")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
 
 from .cavapy import get_climate_data
 from .cava_plot import plot_spatial_map, plot_time_series
