@@ -1,11 +1,11 @@
 [tool.poetry]
 name = "cavapy"
-version = "2.0.4"
+version = "2.0.5"
 description = "CAVA Python package. Retrive climate data."
 authors = ["Riccardo Soldan <riccardosoldan@hotmail.it>", "Oleh Lokshyn <olokshyn@gmail.com>"]
 readme = "README.md"
-license = "MIT"
-repository = "https://github.com/Risk-Team/cavapy"
+license = "Apache-2.0"
+repository = "https://github.com/un-fao/cavapy"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
