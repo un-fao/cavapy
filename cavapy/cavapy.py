@@ -386,7 +386,8 @@ def get_climate_data(
     historical (bool): Flag to indicate if processing historical data (default: False).
         If True, historical data is provided together with projections.
         Historical simulation runs for CORDEX-CORE initiative are provided for the 1980-2005 time period.
-    buffer (int): Buffer distance to expand the region of interest (default: 0).
+    buffer (int): Buffer in coordinate degrees added to each side of the bbox,
+        whether the bbox comes from country bounds or from xlim/ylim (default: 0).
     xlim (tuple or None): Longitudinal bounds of the region of interest. Use only when country is None (default: None).
     ylim (tuple or None): Latitudinal bounds of the region of interest. Use only when country is None (default: None).
     remote (bool): Flag to work with remote data or not (default: True).
