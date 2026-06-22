@@ -13,6 +13,7 @@ sys.modules.setdefault(
 
 from cavapy.cava_config import logger
 from cavapy.cava_download import _select_spatial_subset
+from cavapy.cava_validation import _geo_localize
 
 
 def _data_array(latitude, longitude):
@@ -31,6 +32,29 @@ def _data_array(latitude, longitude):
 
 
 class TestSpatialSelection(unittest.TestCase):
+    def test_buffer_expands_explicit_bbox(self):
+        bbox = _geo_localize(
+            country=None,
+            xlim=(10.0, 11.0),
+            ylim=(0.0, 1.0),
+            buffer=2,
+            obs=True,
+        )
+
+        self.assertEqual(bbox, {"xlim": (8.0, 13.0), "ylim": (-2.0, 3.0)})
+
+    def test_buffer_expands_country_bbox(self):
+        import cavapy.cava_validation as validation
+
+        original_get_country_bounds = validation._get_country_bounds
+        try:
+            validation._get_country_bounds = lambda country: (10.0, 0.0, 11.0, 1.0)
+            bbox = _geo_localize(country="Example", buffer=2, obs=True)
+        finally:
+            validation._get_country_bounds = original_get_country_bounds
+
+        self.assertEqual(bbox, {"xlim": (8.0, 13.0), "ylim": (-2.0, 3.0)})
+
     def test_selects_ascending_latitude(self):
         data = _data_array(latitude=[0.0, 0.5, 1.0], longitude=[10.0, 10.5, 11.0])
 
