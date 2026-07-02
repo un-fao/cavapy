@@ -97,6 +97,23 @@ class TestSpatialSelection(unittest.TestCase):
         self.assertEqual(float(subset.latitude.values[0]), 0.5)
         self.assertEqual(float(subset.longitude.values[0]), 10.5)
 
+    def test_normalizes_zero_to_360_longitude_before_selection(self):
+        data = _data_array(
+            latitude=np.arange(35.25, -20.0, -0.25),
+            longitude=np.arange(235.25, 338.5, 0.25),
+        )
+
+        subset = _select_spatial_subset(
+            data,
+            {"xlim": (-62.0, -59.0), "ylim": (13.0, 15.0)},
+            logger,
+        )
+
+        self.assertEqual(subset.sizes["latitude"], 9)
+        self.assertEqual(subset.sizes["longitude"], 13)
+        self.assertAlmostEqual(float(subset.longitude.min()), -62.0)
+        self.assertAlmostEqual(float(subset.longitude.max()), -59.0)
+
     def test_falls_back_to_nearest_when_bbox_has_no_grid_center(self):
         data = _data_array(latitude=[0.0, 1.0], longitude=[10.0, 11.0])
 
