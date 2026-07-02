@@ -32,6 +32,22 @@ SPATIAL_COORDS = {
 }
 
 
+def _normalize_longitude_coordinate(data: xr.DataArray) -> xr.DataArray:
+    """Normalize 0-360 longitude coordinates to -180..180 for bbox selection."""
+    if "longitude" not in data.coords:
+        return data
+
+    longitude = data["longitude"]
+    values = np.asarray(longitude.values, dtype=float)
+    if values.ndim != 1 or values.size == 0:
+        return data
+    if np.nanmax(values) <= 180:
+        return data
+
+    data = data.assign_coords(longitude=(longitude + 180) % 360 - 180)
+    return data.sortby("longitude")
+
+
 @contextmanager
 def _suppress_stderr_fd():
     """Temporarily redirect stderr to /dev/null (also silences C-level warnings)."""
@@ -108,6 +124,7 @@ def _select_spatial_subset(
     log: logging.Logger,
 ) -> xr.DataArray:
     """Select bbox cells, falling back to nearest cells if the bbox is sub-grid."""
+    data = _normalize_longitude_coordinate(data)
     selectors = {
         coord_name: _coordinate_slice(data[coord_name], bbox[bbox_key])
         for coord_name, bbox_key in SPATIAL_COORDS.items()
