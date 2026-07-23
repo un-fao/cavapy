@@ -49,7 +49,11 @@ def plot_spatial_map(
         raise ValueError(f"Unsupported aggregation method: {aggregation}")
 
     # Create figure with cartopy
-    fig, ax = plt.subplots(figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
+    fig, ax = plt.subplots(
+        figsize=figsize,
+        layout="constrained",
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
 
     # Plot data
     im = plot_data.plot(
@@ -84,7 +88,7 @@ def plot_spatial_map(
     gl.bottom_labels = True
 
     # Add colorbar
-    cbar = plt.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8, pad=0.02)
     if hasattr(plot_data, "units"):
         cbar.set_label(
             f"{plot_data.name} ({plot_data.units})", rotation=270, labelpad=20
@@ -100,12 +104,11 @@ def plot_spatial_map(
         else:
             title = f"{aggregation.title()} {var_name}"
 
-    ax.set_title(title, fontsize=14, pad=20)
-
-    plt.tight_layout()
+    # Avoid Cartopy's gridliner-based title repositioning producing non-finite bounds.
+    ax.set_title(title, fontsize=14, pad=20, y=1.0)
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
 
     return fig
 
