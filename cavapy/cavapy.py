@@ -31,7 +31,7 @@ from .cava_validation import (
 
 _ANNOUNCEMENTS_ATTEMPTED = False
 _ANNOUNCEMENTS_ENV_DISABLE = "CAVAPY_NO_ANNOUNCEMENTS"
-_GITHUB_ISSUES_URL = "https://api.github.com/repos/Risk-Team/cavapy/issues"
+_GITHUB_ISSUES_URL = "https://api.github.com/repos/un-fao/cavapy/issues"
 _ANNOUNCEMENTS_LABEL = "announcement"
 _ANNOUNCEMENTS_TIMEOUT_S = 2
 _ANNOUNCEMENTS_PER_PAGE = 20

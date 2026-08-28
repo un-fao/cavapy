@@ -315,9 +315,12 @@ def _climate_data_for_variable(
             # Load observations for bias correction
             ref = future_obs.result()
             log.info("Performing bias correction with eqm")
+            # Train on the historical run, which overlaps the ERA5 reference period.
+            # Training on the projection would fold the climate-change signal into
+            # the estimated bias and remove it from the corrected output.
             QM_mo = sdba.EmpiricalQuantileMapping.train(
                 ref,
-                proj,
+                hist,
                 group="time.month",
                 kind="*" if variable in ["pr", "rsds", "sfcWind"] else "+",
             )
