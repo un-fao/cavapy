@@ -66,6 +66,16 @@ def _suppress_stderr_fd():
         os.close(saved_fd)
 
 
+def _floor_time_to_day(data: xr.DataArray) -> xr.DataArray:
+    """Drop the time-of-day component from the time axis.
+
+    ERA5 stamps daily values at 00:00 while CORDEX models use 12:00, and
+    xsdba requires identical time arrays between the reference and the
+    training data.
+    """
+    return data.assign_coords(time=data["time"].dt.floor("D"))
+
+
 def _coordinate_slice(coord: xr.DataArray, bounds: tuple[float, float]) -> slice:
     """Build a label slice matching the coordinate's native order."""
     values = np.asarray(coord.values, dtype=float)
@@ -261,6 +271,9 @@ def _climate_data_for_variable(
         if bias_correction and historical:
             # Load observations for bias correction
             ref = future_obs.result()
+            ref = _floor_time_to_day(ref)
+            hist = _floor_time_to_day(hist)
+            proj = _floor_time_to_day(proj)
             log.info("Training eqm with leave-one-out cross-validation")
 
             # Use leave-one-out cross-validation for historical bias correction
@@ -292,6 +305,9 @@ def _climate_data_for_variable(
         elif bias_correction and not historical:
             # Load observations for bias correction
             ref = future_obs.result()
+            ref = _floor_time_to_day(ref)
+            hist = _floor_time_to_day(hist)
+            proj = _floor_time_to_day(proj)
             log.info("Performing bias correction with eqm")
             # Train on the historical run, which overlaps the ERA5 reference period.
             # Training on the projection would fold the climate-change signal into

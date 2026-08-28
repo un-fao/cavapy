@@ -10,8 +10,9 @@ import cavapy.cava_download as cava_download
 import cavapy.cava_validation as cava_validation
 
 
-def _daily_series(start, end, offset):
-    time = pd.date_range(start, end, freq="D")
+def _daily_series(start, end, offset, hour=0):
+    # ERA5 stamps daily values at 00:00, CORDEX models at 12:00.
+    time = pd.date_range(start, end, freq="D") + pd.Timedelta(hours=hour)
     day_of_year = time.dayofyear.values.astype(float)
     values = 10.0 + 5.0 * np.sin(2 * np.pi * day_of_year / 365.25) + offset
     data = xr.DataArray(values, dims=("time",), coords={"time": time})
@@ -37,11 +38,11 @@ _PROJECTION_OFFSET = 5.0
 def _fake_thread_download_data(url=None, **kwargs):
     if kwargs.get("obs"):
         # ERA5 reference, identical to the historical run: the model is unbiased.
-        return _daily_series("1980-01-01", "2005-12-31", offset=0.0)
+        return _daily_series("1980-01-01", "2005-12-31", offset=0.0, hour=0)
     if "historical" in url:
-        return _daily_series("1980-01-01", "2005-12-31", offset=0.0)
+        return _daily_series("1980-01-01", "2005-12-31", offset=0.0, hour=12)
     # Projection carries a +5 degC climate-change signal relative to historical.
-    return _daily_series("2006-01-01", "2010-12-31", offset=_PROJECTION_OFFSET)
+    return _daily_series("2006-01-01", "2010-12-31", offset=_PROJECTION_OFFSET, hour=12)
 
 
 class TestBiasCorrection(unittest.TestCase):
