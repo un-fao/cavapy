@@ -18,12 +18,10 @@ from .cava_config import (
     DEFAULT_YEARS_OBS,
     ERA5_DATA_LOCAL_PATH,
     ERA5_DATA_REMOTE_URL,
-    INVENTORY_DATA_LOCAL_PATH,
-    INVENTORY_DATA_REMOTE_URL,
     VARIABLES_MAP,
     logger,
 )
-from .cava_validation import _ensure_inventory_not_empty
+from .cava_validation import _filter_inventory
 
 
 SPATIAL_COORDS = {
@@ -193,41 +191,6 @@ def _climate_data_for_variable(
     """Fetch and process one variable, optionally bias-correcting and merging runs."""
     log = logger.getChild(variable)
 
-    pd.options.mode.chained_assignment = None
-    inventory_csv_url = (
-        INVENTORY_DATA_REMOTE_URL if remote else INVENTORY_DATA_LOCAL_PATH
-    )
-    data = pd.read_csv(inventory_csv_url)
-    column_to_use = "location" if remote else "hub"
-
-    # Filter data based on whether we need historical data
-    experiments = [rcp]
-    if historical or bias_correction:
-        experiments.append("historical")
-
-    # Determine activity filter based on dataset
-    activity_filter = "FAO" if dataset == "CORDEX-CORE" else "CRDX-ISIMIP-025"
-
-    filtered_data = data[
-        lambda x: (x["activity"].str.contains(activity_filter, na=False))
-        & (x["domain"] == cordex_domain)
-        & (x["model"].str.contains(gcm, na=False))
-        & (x["rcm"].str.contains(rcm, na=False))
-        & (x["experiment"].isin(experiments))
-    ][["experiment", column_to_use]]
-
-    # Fail early if nothing is found
-    _ensure_inventory_not_empty(
-        filtered_data,
-        dataset=dataset,
-        cordex_domain=cordex_domain,
-        gcm=gcm,
-        rcm=rcm,
-        experiments=experiments,
-        activity_filter=activity_filter,
-        log=log,
-    )
-
     future_obs = None
     if obs or bias_correction:
         future_obs = executor.submit(
@@ -246,6 +209,21 @@ def _climate_data_for_variable(
         )
 
     if not obs:
+        # Which experiments we need from the inventory
+        experiments = [rcp]
+        if historical or bias_correction:
+            experiments.append("historical")
+
+        filtered_data, column_to_use = _filter_inventory(
+            remote=remote,
+            dataset=dataset,
+            cordex_domain=cordex_domain,
+            gcm=gcm,
+            rcm=rcm,
+            experiments=experiments,
+            log=log,
+        )
+
         download_fn = partial(
             _thread_download_data,
             bbox=bbox,

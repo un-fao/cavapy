@@ -7,6 +7,7 @@ import pandas as pd
 import xarray as xr
 
 import cavapy.cava_download as cava_download
+import cavapy.cava_validation as cava_validation
 
 
 def _daily_series(start, end, offset):
@@ -52,7 +53,7 @@ class TestBiasCorrection(unittest.TestCase):
         """
         with (
             patch.object(
-                cava_download.pd, "read_csv", lambda *args, **kwargs: _FAKE_INVENTORY.copy()
+                cava_validation, "_read_inventory", lambda url: _FAKE_INVENTORY.copy()
             ),
             patch.object(
                 cava_download, "_thread_download_data", _fake_thread_download_data

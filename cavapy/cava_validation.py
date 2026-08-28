@@ -1,6 +1,7 @@
 """Validation helpers for input parameters and spatial domain checks."""
 
 import logging
+from functools import lru_cache
 
 import pandas as pd
 import cartopy.feature as cfeature
@@ -53,6 +54,68 @@ def _ensure_inventory_not_empty(
     raise ValueError(msg)
 
 
+@lru_cache(maxsize=None)
+def _read_inventory(csv_path_or_url: str) -> pd.DataFrame:
+    """Read the inventory CSV once per process and reuse it across requests."""
+    return pd.read_csv(csv_path_or_url)
+
+
+def _filter_inventory(
+    *,
+    remote: bool,
+    dataset: str,
+    cordex_domain: str,
+    gcm: str,
+    rcm: str,
+    experiments: list[str],
+    log: logging.Logger | None = None,
+) -> tuple[pd.DataFrame, str]:
+    """
+    Return the inventory rows matching the request and the URL column to use.
+
+    Raises:
+        ValueError: If no rows match, or if more than one dataset matches a
+            single experiment (the download path uses exactly one per experiment).
+    """
+    inventory_csv_url = (
+        INVENTORY_DATA_REMOTE_URL if remote else INVENTORY_DATA_LOCAL_PATH
+    )
+    data = _read_inventory(inventory_csv_url)
+    column_to_use = "location" if remote else "hub"
+    activity_filter = "FAO" if dataset == "CORDEX-CORE" else "CRDX-ISIMIP-025"
+
+    filtered_data = data[
+        (data["activity"].str.contains(activity_filter, na=False))
+        & (data["domain"] == cordex_domain)
+        & (data["model"].str.contains(gcm, na=False))
+        & (data["rcm"].str.contains(rcm, na=False))
+        & (data["experiment"].isin(experiments))
+    ][["experiment", column_to_use]].copy()
+
+    _ensure_inventory_not_empty(
+        filtered_data,
+        dataset=dataset,
+        cordex_domain=cordex_domain,
+        gcm=gcm,
+        rcm=rcm,
+        experiments=experiments,
+        activity_filter=activity_filter,
+        log=log,
+    )
+
+    experiment_counts = filtered_data["experiment"].value_counts()
+    ambiguous = experiment_counts[experiment_counts > 1]
+    if not ambiguous.empty:
+        raise ValueError(
+            f"Ambiguous inventory match for domain={cordex_domain}, gcm={gcm}, "
+            f"rcm={rcm}: multiple datasets found for experiment(s) "
+            f"{sorted(ambiguous.index)}. Please report this at "
+            "https://github.com/un-fao/cavapy/issues"
+        )
+
+    return filtered_data, column_to_use
+
+
 def _validate_urls(
     gcm: str = None,
     rcm: str = None,
@@ -70,42 +133,18 @@ def _validate_urls(
     log = logger.getChild("URL-validation")
 
     if obs is False:
-        inventory_csv_url = (
-            INVENTORY_DATA_REMOTE_URL if remote else INVENTORY_DATA_LOCAL_PATH
-        )
-        data = pd.read_csv(inventory_csv_url)
-
-        # Set the column to use based on whether the data is remote or local
-        column_to_use = "location" if remote else "hub"
-
         # Define which experiments we need
         experiments = [rcp]
         if historical or bias_correction:
             experiments.append("historical")
 
-        # Determine activity filter based on dataset
-        activity_filter = "FAO" if dataset == "CORDEX-CORE" else "CRDX-ISIMIP-025"
-
-        # Filter the data based on the conditions
-        filtered_data = data[
-            lambda x: (
-                x["activity"].str.contains(activity_filter, na=False)
-                & (x["domain"] == cordex_domain)
-                & (x["model"].str.contains(gcm, na=False))
-                & (x["rcm"].str.contains(rcm, na=False))
-                & (x["experiment"].isin(experiments))
-            )
-        ][["experiment", column_to_use]]
-
-        # Fail early if nothing is found
-        _ensure_inventory_not_empty(
-            filtered_data,
+        filtered_data, column_to_use = _filter_inventory(
+            remote=remote,
             dataset=dataset,
             cordex_domain=cordex_domain,
             gcm=gcm,
             rcm=rcm,
             experiments=experiments,
-            activity_filter=activity_filter,
             log=log,
         )
 

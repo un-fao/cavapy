@@ -13,17 +13,18 @@ except ImportError:
     warnings.filterwarnings("ignore", category=UserWarning, module="cartopy.io")
 
 logger = logging.getLogger("climate")
-logger.handlers = []  # Remove any existing handlers
-handler = logging.StreamHandler()
-formatter = logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-handler.setFormatter(formatter)
-for hdlr in logger.handlers[:]:  # remove all old handlers
-    logger.removeHandler(hdlr)
-logger.addHandler(handler)
-logger.setLevel(logging.DEBUG)
+# Progress messages are part of the tool's UX, so a console handler is attached
+# by default -- but only when the host application has not already configured
+# this logger, and without touching handlers installed by the host.
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 VARIABLES_MAP = {
     "pr": "tp",

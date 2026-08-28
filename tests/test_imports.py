@@ -1,6 +1,14 @@
-def test_imports():
-    import cavapy
+import unittest
 
-    assert hasattr(cavapy, "get_climate_data")
-    assert hasattr(cavapy, "plot_spatial_map")
-    assert hasattr(cavapy, "plot_time_series")
+
+class TestImports(unittest.TestCase):
+    def test_public_api_is_exposed(self):
+        import cavapy
+
+        self.assertTrue(hasattr(cavapy, "get_climate_data"))
+        self.assertTrue(hasattr(cavapy, "plot_spatial_map"))
+        self.assertTrue(hasattr(cavapy, "plot_time_series"))
+
+
+if __name__ == "__main__":
+    unittest.main()
