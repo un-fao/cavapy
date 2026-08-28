@@ -1,6 +1,7 @@
 """Validation helpers for input parameters and spatial domain checks."""
 
 import logging
+from functools import lru_cache
 
 import pandas as pd
 import cartopy.feature as cfeature
@@ -53,6 +54,68 @@ def _ensure_inventory_not_empty(
     raise ValueError(msg)
 
 
+@lru_cache(maxsize=None)
+def _read_inventory(csv_path_or_url: str) -> pd.DataFrame:
+    """Read the inventory CSV once per process and reuse it across requests."""
+    return pd.read_csv(csv_path_or_url)
+
+
+def _filter_inventory(
+    *,
+    remote: bool,
+    dataset: str,
+    cordex_domain: str,
+    gcm: str,
+    rcm: str,
+    experiments: list[str],
+    log: logging.Logger | None = None,
+) -> tuple[pd.DataFrame, str]:
+    """
+    Return the inventory rows matching the request and the URL column to use.
+
+    Raises:
+        ValueError: If no rows match, or if more than one dataset matches a
+            single experiment (the download path uses exactly one per experiment).
+    """
+    inventory_csv_url = (
+        INVENTORY_DATA_REMOTE_URL if remote else INVENTORY_DATA_LOCAL_PATH
+    )
+    data = _read_inventory(inventory_csv_url)
+    column_to_use = "location" if remote else "hub"
+    activity_filter = "FAO" if dataset == "CORDEX-CORE" else "CRDX-ISIMIP-025"
+
+    filtered_data = data[
+        (data["activity"].str.contains(activity_filter, na=False))
+        & (data["domain"] == cordex_domain)
+        & (data["model"].str.contains(gcm, na=False))
+        & (data["rcm"].str.contains(rcm, na=False))
+        & (data["experiment"].isin(experiments))
+    ][["experiment", column_to_use]].copy()
+
+    _ensure_inventory_not_empty(
+        filtered_data,
+        dataset=dataset,
+        cordex_domain=cordex_domain,
+        gcm=gcm,
+        rcm=rcm,
+        experiments=experiments,
+        activity_filter=activity_filter,
+        log=log,
+    )
+
+    experiment_counts = filtered_data["experiment"].value_counts()
+    ambiguous = experiment_counts[experiment_counts > 1]
+    if not ambiguous.empty:
+        raise ValueError(
+            f"Ambiguous inventory match for domain={cordex_domain}, gcm={gcm}, "
+            f"rcm={rcm}: multiple datasets found for experiment(s) "
+            f"{sorted(ambiguous.index)}. Please report this at "
+            "https://github.com/un-fao/cavapy/issues"
+        )
+
+    return filtered_data, column_to_use
+
+
 def _validate_urls(
     gcm: str = None,
     rcm: str = None,
@@ -70,42 +133,18 @@ def _validate_urls(
     log = logger.getChild("URL-validation")
 
     if obs is False:
-        inventory_csv_url = (
-            INVENTORY_DATA_REMOTE_URL if remote else INVENTORY_DATA_LOCAL_PATH
-        )
-        data = pd.read_csv(inventory_csv_url)
-
-        # Set the column to use based on whether the data is remote or local
-        column_to_use = "location" if remote else "hub"
-
         # Define which experiments we need
         experiments = [rcp]
         if historical or bias_correction:
             experiments.append("historical")
 
-        # Determine activity filter based on dataset
-        activity_filter = "FAO" if dataset == "CORDEX-CORE" else "CRDX-ISIMIP-025"
-
-        # Filter the data based on the conditions
-        filtered_data = data[
-            lambda x: (
-                x["activity"].str.contains(activity_filter, na=False)
-                & (x["domain"] == cordex_domain)
-                & (x["model"].str.contains(gcm, na=False))
-                & (x["rcm"].str.contains(rcm, na=False))
-                & (x["experiment"].isin(experiments))
-            )
-        ][["experiment", column_to_use]]
-
-        # Fail early if nothing is found
-        _ensure_inventory_not_empty(
-            filtered_data,
+        filtered_data, column_to_use = _filter_inventory(
+            remote=remote,
             dataset=dataset,
             cordex_domain=cordex_domain,
             gcm=gcm,
             rcm=rcm,
             experiments=experiments,
-            activity_filter=activity_filter,
             log=log,
         )
 
@@ -232,6 +271,19 @@ def _validate_gcm_rcm_combinations(cordex_domain: str, gcm: str, rcm: str):
             ("MPI", "Reg"),
             ("NCC", "Reg"),
         ],
+        "EUR-22": [
+            ("MOHC", "Reg"),  # Only REMO runs exist for EUR-22
+            ("MPI", "Reg"),
+            ("NCC", "Reg"),
+        ],
+        "NAM-22": [
+            ("MOHC", "Reg"),  # Only REMO runs exist for NAM-22
+            ("MPI", "Reg"),
+            ("NCC", "Reg"),
+        ],
+        "CAM-22": [
+            ("NCC", "Reg"),  # CAM-22 pairs RegCM4-7 with NOAA-GFDL, not NorESM
+        ],
     }
 
     if cordex_domain in invalid_combinations:
@@ -255,105 +307,54 @@ def _validate_gcm_rcm_combinations(cordex_domain: str, gcm: str, rcm: str):
             )
 
 
+# Geographic extents (min_lon, min_lat, max_lon, max_lat) of the regridded
+# 0.25-degree products served on THREDDS, measured from the datasets themselves
+# (August 2026). No served domain crosses the antimeridian: AUS-22 and EAS-22
+# are clipped at 180 degrees East.
+CORDEX_DOMAIN_EXTENTS = {
+    "NAM-22": (-171.75, 12.25, -22.25, 76.25),
+    "EUR-22": (-44.75, 22.00, 65.00, 72.50),
+    "SEA-22": (89.25, -15.25, 147.00, 26.50),
+    "AUS-22": (86.25, -53.25, 180.00, 12.75),
+    "WAS-22": (19.25, -15.75, 116.25, 45.75),
+    "EAS-22": (44.75, 0.25, 179.75, 62.25),
+    "SAM-22": (-106.25, -58.25, -16.25, 18.75),
+    "CAM-22": (-124.75, -19.75, -21.75, 35.25),
+    "AFR-22": (-24.25, -46.25, 59.75, 42.75),
+    "CAS-22": (10.75, 17.75, 140.25, 69.75),
+}
+
+
 def _validate_cordex_domain(xlim, ylim, cordex_domain):
     """Ensure the bbox is fully contained inside the selected CORDEX domain."""
-    # CORDEX domains data
-    cordex_domains_df = pd.DataFrame(
-        {
-            "min_lon": [
-                -33,
-                -28.3,
-                89.25,
-                86.75,
-                19.25,
-                44.0,
-                -106.25,
-                -115.0,
-                -24.25,
-                10.75,
-            ],
-            "min_lat": [
-                -28,
-                -23,
-                -15.25,
-                -54.25,
-                -15.75,
-                -4.0,
-                -58.25,
-                -14.5,
-                -46.25,
-                17.75,
-            ],
-            "max_lon": [
-                20,
-                18,
-                147.0,
-                -152.75,
-                116.25,
-                -172.0,
-                -16.25,
-                -30.5,
-                59.75,
-                140.25,
-            ],
-            "max_lat": [
-                28,
-                21.7,
-                26.5,
-                13.75,
-                45.75,
-                65.0,
-                18.75,
-                28.5,
-                42.75,
-                69.75,
-            ],
-            "cordex_domain": [
-                "NAM-22",
-                "EUR-22",
-                "SEA-22",
-                "AUS-22",
-                "WAS-22",
-                "EAS-22",
-                "SAM-22",
-                "CAM-22",
-                "AFR-22",
-                "CAS-22",
-            ],
-        }
-    )
+    if cordex_domain not in CORDEX_DOMAIN_EXTENTS:
+        raise ValueError(f"CORDEX domain '{cordex_domain}' is not recognized.")
 
-    def is_bbox_contained(bbox, domain):
-        """Check if bbox is contained within the domain bounding box."""
+    def is_bbox_contained(bbox, extent):
+        min_lon, min_lat, max_lon, max_lat = extent
         return (
-            bbox[0] >= domain["min_lon"]
-            and bbox[1] >= domain["min_lat"]
-            and bbox[2] <= domain["max_lon"]
-            and bbox[3] <= domain["max_lat"]
+            bbox[0] >= min_lon
+            and bbox[1] >= min_lat
+            and bbox[2] <= max_lon
+            and bbox[3] <= max_lat
         )
 
     user_bbox = [xlim[0], ylim[0], xlim[1], ylim[1]]
-    domain_row = cordex_domains_df[cordex_domains_df["cordex_domain"] == cordex_domain]
 
-    if domain_row.empty:
-        raise ValueError(f"CORDEX domain '{cordex_domain}' is not recognized.")
+    if is_bbox_contained(user_bbox, CORDEX_DOMAIN_EXTENTS[cordex_domain]):
+        return
 
-    domain_bbox = domain_row.iloc[0]
+    suggested_domains = [
+        domain
+        for domain, extent in CORDEX_DOMAIN_EXTENTS.items()
+        if is_bbox_contained(user_bbox, extent)
+    ]
 
-    if not is_bbox_contained(user_bbox, domain_bbox):
-        suggested_domains = cordex_domains_df[
-            cordex_domains_df.apply(
-                lambda row: is_bbox_contained(user_bbox, row), axis=1
-            )
-        ]
-
-        if suggested_domains.empty:
-            raise ValueError(
-                f"The bounding box {user_bbox} is outside of all available CORDEX domains."
-            )
-
-        suggested_domain = suggested_domains.iloc[0]["cordex_domain"]
-
+    if not suggested_domains:
         raise ValueError(
-            f"Bounding box {user_bbox} is not within '{cordex_domain}'. Suggested domain: '{suggested_domain}'."
+            f"The bounding box {user_bbox} is outside of all available CORDEX domains."
         )
+
+    raise ValueError(
+        f"Bounding box {user_bbox} is not within '{cordex_domain}'. Suggested domain: '{suggested_domains[0]}'."
+    )

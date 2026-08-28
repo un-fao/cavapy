@@ -307,5 +307,5 @@ For advanced visualization and reporting, see [CAVAanalytics](https://risk-team.
 
 ## Citation and License
 
-- License: [MIT](LICENSE)
+- License: [Apache 2.0](LICENSE)
 - Package metadata and build details: [pyproject.toml](pyproject.toml)

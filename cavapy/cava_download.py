@@ -18,12 +18,10 @@ from .cava_config import (
     DEFAULT_YEARS_OBS,
     ERA5_DATA_LOCAL_PATH,
     ERA5_DATA_REMOTE_URL,
-    INVENTORY_DATA_LOCAL_PATH,
-    INVENTORY_DATA_REMOTE_URL,
     VARIABLES_MAP,
     logger,
 )
-from .cava_validation import _ensure_inventory_not_empty
+from .cava_validation import _filter_inventory
 
 
 SPATIAL_COORDS = {
@@ -66,6 +64,64 @@ def _suppress_stderr_fd():
     finally:
         os.dup2(saved_fd, stderr_fd)
         os.close(saved_fd)
+
+
+def _ensure_geographic_grid(ds: xr.Dataset, data: xr.DataArray, url: str) -> None:
+    """Fail fast when a file's 1-D coordinates are not geographic degrees.
+
+    Some server-side files carry 1-D 'longitude'/'latitude' coordinates that
+    are actually rotated-pole degrees or projected meters, with the true
+    geographic coordinates stored as 2-D 'lat'/'lon' arrays. Subsetting such
+    files by degrees would silently return data for the wrong region. The
+    check is value-based, so it stops firing automatically once the files are
+    interpolated to a regular grid, whatever their metadata says.
+    """
+    problems = []
+
+    lat = data.coords.get("latitude")
+    lon = data.coords.get("longitude")
+
+    # Projected coordinates (meters) are far outside any degree range.
+    if lat is not None and (np.abs(np.asarray(lat.values, dtype=float)) > 90).any():
+        problems.append("1-D latitude values outside [-90, 90]")
+    if lon is not None:
+        lon_values = np.asarray(lon.values, dtype=float)
+        if (lon_values < -180).any() or (lon_values > 360).any():
+            problems.append("1-D longitude values outside [-180, 360]")
+
+    # Rotated-pole coordinates look like plausible degrees, but such files also
+    # carry 2-D geographic 'lat' arrays that disagree with the 1-D axis.
+    if (
+        not problems
+        and lat is not None
+        and "lat" in ds.variables
+        and ds["lat"].ndim == 2
+    ):
+        deviation = float(np.abs(ds["lat"] - lat).max())
+        if deviation > 1.0:
+            problems.append(
+                "2-D geographic 'lat' deviates from the 1-D latitude axis "
+                f"by up to {deviation:.1f} degrees"
+            )
+
+    if problems:
+        raise ValueError(
+            f"Dataset is not on a regular longitude/latitude grid "
+            f"({'; '.join(problems)}): {url}\n"
+            "Subsetting it by geographic coordinates would return data for the "
+            "wrong region. This is a server-side issue with this file: it "
+            "needs to be interpolated to a regular grid like the other domains."
+        )
+
+
+def _floor_time_to_day(data: xr.DataArray) -> xr.DataArray:
+    """Drop the time-of-day component from the time axis.
+
+    ERA5 stamps daily values at 00:00 while CORDEX models use 12:00, and
+    xsdba requires identical time arrays between the reference and the
+    training data.
+    """
+    return data.assign_coords(time=data["time"].dt.floor("D"))
 
 
 def _coordinate_slice(coord: xr.DataArray, bounds: tuple[float, float]) -> slice:
@@ -193,41 +249,6 @@ def _climate_data_for_variable(
     """Fetch and process one variable, optionally bias-correcting and merging runs."""
     log = logger.getChild(variable)
 
-    pd.options.mode.chained_assignment = None
-    inventory_csv_url = (
-        INVENTORY_DATA_REMOTE_URL if remote else INVENTORY_DATA_LOCAL_PATH
-    )
-    data = pd.read_csv(inventory_csv_url)
-    column_to_use = "location" if remote else "hub"
-
-    # Filter data based on whether we need historical data
-    experiments = [rcp]
-    if historical or bias_correction:
-        experiments.append("historical")
-
-    # Determine activity filter based on dataset
-    activity_filter = "FAO" if dataset == "CORDEX-CORE" else "CRDX-ISIMIP-025"
-
-    filtered_data = data[
-        lambda x: (x["activity"].str.contains(activity_filter, na=False))
-        & (x["domain"] == cordex_domain)
-        & (x["model"].str.contains(gcm, na=False))
-        & (x["rcm"].str.contains(rcm, na=False))
-        & (x["experiment"].isin(experiments))
-    ][["experiment", column_to_use]]
-
-    # Fail early if nothing is found
-    _ensure_inventory_not_empty(
-        filtered_data,
-        dataset=dataset,
-        cordex_domain=cordex_domain,
-        gcm=gcm,
-        rcm=rcm,
-        experiments=experiments,
-        activity_filter=activity_filter,
-        log=log,
-    )
-
     future_obs = None
     if obs or bias_correction:
         future_obs = executor.submit(
@@ -246,6 +267,21 @@ def _climate_data_for_variable(
         )
 
     if not obs:
+        # Which experiments we need from the inventory
+        experiments = [rcp]
+        if historical or bias_correction:
+            experiments.append("historical")
+
+        filtered_data, column_to_use = _filter_inventory(
+            remote=remote,
+            dataset=dataset,
+            cordex_domain=cordex_domain,
+            gcm=gcm,
+            rcm=rcm,
+            experiments=experiments,
+            log=log,
+        )
+
         download_fn = partial(
             _thread_download_data,
             bbox=bbox,
@@ -283,6 +319,9 @@ def _climate_data_for_variable(
         if bias_correction and historical:
             # Load observations for bias correction
             ref = future_obs.result()
+            ref = _floor_time_to_day(ref)
+            hist = _floor_time_to_day(hist)
+            proj = _floor_time_to_day(proj)
             log.info("Training eqm with leave-one-out cross-validation")
 
             # Use leave-one-out cross-validation for historical bias correction
@@ -314,10 +353,16 @@ def _climate_data_for_variable(
         elif bias_correction and not historical:
             # Load observations for bias correction
             ref = future_obs.result()
+            ref = _floor_time_to_day(ref)
+            hist = _floor_time_to_day(hist)
+            proj = _floor_time_to_day(proj)
             log.info("Performing bias correction with eqm")
+            # Train on the historical run, which overlaps the ERA5 reference period.
+            # Training on the projection would fold the climate-change signal into
+            # the estimated bias and remove it from the corrected output.
             QM_mo = sdba.EmpiricalQuantileMapping.train(
                 ref,
-                proj,
+                hist,
                 group="time.month",
                 kind="*" if variable in ["pr", "rsds", "sfcWind"] else "+",
             )
@@ -495,6 +540,8 @@ def _download_data(
                 msg = f"Variable {variable} is not available for this model: {url}"
                 log.exception(msg)
                 raise ValueError(msg)
+
+            _ensure_geographic_grid(ds, ds_var, url)
 
             log.info("Connection established")
             ds_cropped = _select_spatial_subset(ds_var, bbox, log)
