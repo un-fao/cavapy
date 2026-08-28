@@ -47,7 +47,7 @@ class TestVariables(unittest.TestCase):
         cavapy_module = importlib.import_module("cavapy.cavapy")
         calls = []
 
-        def fake_geo_localize(country, xlim, ylim, buffer, cordex_domain, obs, dataset):
+        def fake_geo_localize(country, xlim, ylim, buffer, cordex_domain, obs):
             calls.append(
                 {
                     "country": country,

@@ -66,6 +66,54 @@ def _suppress_stderr_fd():
         os.close(saved_fd)
 
 
+def _ensure_geographic_grid(ds: xr.Dataset, data: xr.DataArray, url: str) -> None:
+    """Fail fast when a file's 1-D coordinates are not geographic degrees.
+
+    Some server-side files carry 1-D 'longitude'/'latitude' coordinates that
+    are actually rotated-pole degrees or projected meters, with the true
+    geographic coordinates stored as 2-D 'lat'/'lon' arrays. Subsetting such
+    files by degrees would silently return data for the wrong region. The
+    check is value-based, so it stops firing automatically once the files are
+    interpolated to a regular grid, whatever their metadata says.
+    """
+    problems = []
+
+    lat = data.coords.get("latitude")
+    lon = data.coords.get("longitude")
+
+    # Projected coordinates (meters) are far outside any degree range.
+    if lat is not None and (np.abs(np.asarray(lat.values, dtype=float)) > 90).any():
+        problems.append("1-D latitude values outside [-90, 90]")
+    if lon is not None:
+        lon_values = np.asarray(lon.values, dtype=float)
+        if (lon_values < -180).any() or (lon_values > 360).any():
+            problems.append("1-D longitude values outside [-180, 360]")
+
+    # Rotated-pole coordinates look like plausible degrees, but such files also
+    # carry 2-D geographic 'lat' arrays that disagree with the 1-D axis.
+    if (
+        not problems
+        and lat is not None
+        and "lat" in ds.variables
+        and ds["lat"].ndim == 2
+    ):
+        deviation = float(np.abs(ds["lat"] - lat).max())
+        if deviation > 1.0:
+            problems.append(
+                "2-D geographic 'lat' deviates from the 1-D latitude axis "
+                f"by up to {deviation:.1f} degrees"
+            )
+
+    if problems:
+        raise ValueError(
+            f"Dataset is not on a regular longitude/latitude grid "
+            f"({'; '.join(problems)}): {url}\n"
+            "Subsetting it by geographic coordinates would return data for the "
+            "wrong region. This is a server-side issue with this file: it "
+            "needs to be interpolated to a regular grid like the other domains."
+        )
+
+
 def _floor_time_to_day(data: xr.DataArray) -> xr.DataArray:
     """Drop the time-of-day component from the time axis.
 
@@ -492,6 +540,8 @@ def _download_data(
                 msg = f"Variable {variable} is not available for this model: {url}"
                 log.exception(msg)
                 raise ValueError(msg)
+
+            _ensure_geographic_grid(ds, ds_var, url)
 
             log.info("Connection established")
             ds_cropped = _select_spatial_subset(ds_var, bbox, log)

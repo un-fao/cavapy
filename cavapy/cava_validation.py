@@ -222,7 +222,6 @@ def _geo_localize(
     buffer: int = 0,
     cordex_domain: str = None,
     obs: bool = False,
-    dataset: str = "CORDEX-CORE",
 ) -> dict[str, tuple[float, float]]:
     """Resolve a country name or bbox into a validated bounding box."""
     if country:
@@ -245,7 +244,7 @@ def _geo_localize(
     # Only validate CORDEX domain when processing non-observational data
     # Skip validation for observations or when using dummy values
     if not obs and cordex_domain:
-        _validate_cordex_domain(xlim, ylim, cordex_domain, dataset)
+        _validate_cordex_domain(xlim, ylim, cordex_domain)
 
     return {"xlim": xlim, "ylim": ylim}
 
@@ -284,9 +283,6 @@ def _validate_gcm_rcm_combinations(cordex_domain: str, gcm: str, rcm: str):
         ],
         "CAM-22": [
             ("NCC", "Reg"),  # CAM-22 pairs RegCM4-7 with NOAA-GFDL, not NorESM
-        ],
-        "EAS-22": [
-            ("MPI", "Reg"),  # No MPI RegCM4-4 run in the bias-corrected product
         ],
     }
 
@@ -329,24 +325,10 @@ CORDEX_DOMAIN_EXTENTS = {
 }
 
 
-def _validate_cordex_domain(xlim, ylim, cordex_domain, dataset="CORDEX-CORE"):
+def _validate_cordex_domain(xlim, ylim, cordex_domain):
     """Ensure the bbox is fully contained inside the selected CORDEX domain."""
     if cordex_domain not in CORDEX_DOMAIN_EXTENTS:
         raise ValueError(f"CORDEX domain '{cordex_domain}' is not recognized.")
-
-    # The EAS-22 CORDEX-CORE files on the server are on their native model
-    # grids (rotated pole for REMO, projected meters for RegCM), so the
-    # regular lat/lon subsetting used by this package would return data for
-    # the wrong region. Only the bias-corrected product is on a regular grid.
-    def _eas_unavailable(domain):
-        return domain == "EAS-22" and dataset == "CORDEX-CORE"
-
-    if _eas_unavailable(cordex_domain):
-        raise ValueError(
-            "EAS-22 is currently not available for dataset='CORDEX-CORE': the "
-            "EAS-22 files on the server are not on a regular latitude/longitude "
-            "grid. Use dataset='CORDEX-CORE-BC' for EAS-22."
-        )
 
     def is_bbox_contained(bbox, extent):
         min_lon, min_lat, max_lon, max_lat = extent
@@ -365,7 +347,7 @@ def _validate_cordex_domain(xlim, ylim, cordex_domain, dataset="CORDEX-CORE"):
     suggested_domains = [
         domain
         for domain, extent in CORDEX_DOMAIN_EXTENTS.items()
-        if is_bbox_contained(user_bbox, extent) and not _eas_unavailable(domain)
+        if is_bbox_contained(user_bbox, extent)
     ]
 
     if not suggested_domains:

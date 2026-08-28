@@ -22,27 +22,21 @@ IN_DOMAIN_BBOXES = {
 class TestCordexDomainValidation(unittest.TestCase):
     def test_every_domain_accepts_a_realistic_country_bbox(self):
         for domain, (xlim, ylim) in IN_DOMAIN_BBOXES.items():
-            dataset = "CORDEX-CORE-BC" if domain == "EAS-22" else "CORDEX-CORE"
             with self.subTest(domain=domain):
-                _validate_cordex_domain(xlim, ylim, domain, dataset)
+                _validate_cordex_domain(xlim, ylim, domain)
 
     def test_domain_table_covers_all_valid_domains(self):
         for domain in VALID_DOMAINS:
             self.assertIn(domain, CORDEX_DOMAIN_EXTENTS)
 
-    def test_eas22_rejected_for_non_bias_corrected_dataset(self):
-        xlim, ylim = IN_DOMAIN_BBOXES["EAS-22"]
-        with self.assertRaisesRegex(ValueError, "CORDEX-CORE-BC"):
-            _validate_cordex_domain(xlim, ylim, "EAS-22", "CORDEX-CORE")
-
     def test_out_of_domain_bbox_suggests_containing_domain(self):
         xlim, ylim = IN_DOMAIN_BBOXES["EUR-22"]
         with self.assertRaisesRegex(ValueError, "EUR-22"):
-            _validate_cordex_domain(xlim, ylim, "AFR-22", "CORDEX-CORE")
+            _validate_cordex_domain(xlim, ylim, "AFR-22")
 
     def test_unknown_domain_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "not recognized"):
-            _validate_cordex_domain((0.0, 1.0), (0.0, 1.0), "XYZ-22", "CORDEX-CORE")
+            _validate_cordex_domain((0.0, 1.0), (0.0, 1.0), "XYZ-22")
 
 
 if __name__ == "__main__":
