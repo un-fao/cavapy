@@ -45,6 +45,7 @@ VALID_DOMAINS = [
     "AUS-22",
     "SAM-22",
     "CAM-22",
+    "CAS-22",
 ]
 VALID_RCPS = ["rcp26", "rcp85"]
 VALID_GCM = ["MOHC", "MPI", "NCC"]

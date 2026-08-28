@@ -214,7 +214,7 @@ def _get_climate_data_single(
         variables,
     )
 
-    bbox = _geo_localize(country, xlim, ylim, buffer, cordex_domain, obs)
+    bbox = _geo_localize(country, xlim, ylim, buffer, cordex_domain, obs, dataset)
 
     if num_processes <= 1 or len(variables) <= 1:
         results = {}
@@ -539,7 +539,7 @@ def get_climate_data(
         "retry_log_level": retry_log_level,
     }
 
-    bbox = _geo_localize(country, xlim, ylim, buffer, cordex_domain, obs)
+    bbox = _geo_localize(country, xlim, ylim, buffer, cordex_domain, obs, dataset)
 
     for rcp_val, gcm_val, rcm_val in valid_combos:
         _validate_urls(

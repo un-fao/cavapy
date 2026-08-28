@@ -183,6 +183,7 @@ def _geo_localize(
     buffer: int = 0,
     cordex_domain: str = None,
     obs: bool = False,
+    dataset: str = "CORDEX-CORE",
 ) -> dict[str, tuple[float, float]]:
     """Resolve a country name or bbox into a validated bounding box."""
     if country:
@@ -205,7 +206,7 @@ def _geo_localize(
     # Only validate CORDEX domain when processing non-observational data
     # Skip validation for observations or when using dummy values
     if not obs and cordex_domain:
-        _validate_cordex_domain(xlim, ylim, cordex_domain)
+        _validate_cordex_domain(xlim, ylim, cordex_domain, dataset)
 
     return {"xlim": xlim, "ylim": ylim}
 
@@ -232,6 +233,22 @@ def _validate_gcm_rcm_combinations(cordex_domain: str, gcm: str, rcm: str):
             ("MPI", "Reg"),
             ("NCC", "Reg"),
         ],
+        "EUR-22": [
+            ("MOHC", "Reg"),  # Only REMO runs exist for EUR-22
+            ("MPI", "Reg"),
+            ("NCC", "Reg"),
+        ],
+        "NAM-22": [
+            ("MOHC", "Reg"),  # Only REMO runs exist for NAM-22
+            ("MPI", "Reg"),
+            ("NCC", "Reg"),
+        ],
+        "CAM-22": [
+            ("NCC", "Reg"),  # CAM-22 pairs RegCM4-7 with NOAA-GFDL, not NorESM
+        ],
+        "EAS-22": [
+            ("MPI", "Reg"),  # No MPI RegCM4-4 run in the bias-corrected product
+        ],
     }
 
     if cordex_domain in invalid_combinations:
@@ -255,105 +272,68 @@ def _validate_gcm_rcm_combinations(cordex_domain: str, gcm: str, rcm: str):
             )
 
 
-def _validate_cordex_domain(xlim, ylim, cordex_domain):
-    """Ensure the bbox is fully contained inside the selected CORDEX domain."""
-    # CORDEX domains data
-    cordex_domains_df = pd.DataFrame(
-        {
-            "min_lon": [
-                -33,
-                -28.3,
-                89.25,
-                86.75,
-                19.25,
-                44.0,
-                -106.25,
-                -115.0,
-                -24.25,
-                10.75,
-            ],
-            "min_lat": [
-                -28,
-                -23,
-                -15.25,
-                -54.25,
-                -15.75,
-                -4.0,
-                -58.25,
-                -14.5,
-                -46.25,
-                17.75,
-            ],
-            "max_lon": [
-                20,
-                18,
-                147.0,
-                -152.75,
-                116.25,
-                -172.0,
-                -16.25,
-                -30.5,
-                59.75,
-                140.25,
-            ],
-            "max_lat": [
-                28,
-                21.7,
-                26.5,
-                13.75,
-                45.75,
-                65.0,
-                18.75,
-                28.5,
-                42.75,
-                69.75,
-            ],
-            "cordex_domain": [
-                "NAM-22",
-                "EUR-22",
-                "SEA-22",
-                "AUS-22",
-                "WAS-22",
-                "EAS-22",
-                "SAM-22",
-                "CAM-22",
-                "AFR-22",
-                "CAS-22",
-            ],
-        }
-    )
+# Geographic extents (min_lon, min_lat, max_lon, max_lat) of the regridded
+# 0.25-degree products served on THREDDS, measured from the datasets themselves
+# (August 2026). No served domain crosses the antimeridian: AUS-22 and EAS-22
+# are clipped at 180 degrees East.
+CORDEX_DOMAIN_EXTENTS = {
+    "NAM-22": (-171.75, 12.25, -22.25, 76.25),
+    "EUR-22": (-44.75, 22.00, 65.00, 72.50),
+    "SEA-22": (89.25, -15.25, 147.00, 26.50),
+    "AUS-22": (86.25, -53.25, 180.00, 12.75),
+    "WAS-22": (19.25, -15.75, 116.25, 45.75),
+    "EAS-22": (44.75, 0.25, 179.75, 62.25),
+    "SAM-22": (-106.25, -58.25, -16.25, 18.75),
+    "CAM-22": (-124.75, -19.75, -21.75, 35.25),
+    "AFR-22": (-24.25, -46.25, 59.75, 42.75),
+    "CAS-22": (10.75, 17.75, 140.25, 69.75),
+}
 
-    def is_bbox_contained(bbox, domain):
-        """Check if bbox is contained within the domain bounding box."""
+
+def _validate_cordex_domain(xlim, ylim, cordex_domain, dataset="CORDEX-CORE"):
+    """Ensure the bbox is fully contained inside the selected CORDEX domain."""
+    if cordex_domain not in CORDEX_DOMAIN_EXTENTS:
+        raise ValueError(f"CORDEX domain '{cordex_domain}' is not recognized.")
+
+    # The EAS-22 CORDEX-CORE files on the server are on their native model
+    # grids (rotated pole for REMO, projected meters for RegCM), so the
+    # regular lat/lon subsetting used by this package would return data for
+    # the wrong region. Only the bias-corrected product is on a regular grid.
+    def _eas_unavailable(domain):
+        return domain == "EAS-22" and dataset == "CORDEX-CORE"
+
+    if _eas_unavailable(cordex_domain):
+        raise ValueError(
+            "EAS-22 is currently not available for dataset='CORDEX-CORE': the "
+            "EAS-22 files on the server are not on a regular latitude/longitude "
+            "grid. Use dataset='CORDEX-CORE-BC' for EAS-22."
+        )
+
+    def is_bbox_contained(bbox, extent):
+        min_lon, min_lat, max_lon, max_lat = extent
         return (
-            bbox[0] >= domain["min_lon"]
-            and bbox[1] >= domain["min_lat"]
-            and bbox[2] <= domain["max_lon"]
-            and bbox[3] <= domain["max_lat"]
+            bbox[0] >= min_lon
+            and bbox[1] >= min_lat
+            and bbox[2] <= max_lon
+            and bbox[3] <= max_lat
         )
 
     user_bbox = [xlim[0], ylim[0], xlim[1], ylim[1]]
-    domain_row = cordex_domains_df[cordex_domains_df["cordex_domain"] == cordex_domain]
 
-    if domain_row.empty:
-        raise ValueError(f"CORDEX domain '{cordex_domain}' is not recognized.")
+    if is_bbox_contained(user_bbox, CORDEX_DOMAIN_EXTENTS[cordex_domain]):
+        return
 
-    domain_bbox = domain_row.iloc[0]
+    suggested_domains = [
+        domain
+        for domain, extent in CORDEX_DOMAIN_EXTENTS.items()
+        if is_bbox_contained(user_bbox, extent) and not _eas_unavailable(domain)
+    ]
 
-    if not is_bbox_contained(user_bbox, domain_bbox):
-        suggested_domains = cordex_domains_df[
-            cordex_domains_df.apply(
-                lambda row: is_bbox_contained(user_bbox, row), axis=1
-            )
-        ]
-
-        if suggested_domains.empty:
-            raise ValueError(
-                f"The bounding box {user_bbox} is outside of all available CORDEX domains."
-            )
-
-        suggested_domain = suggested_domains.iloc[0]["cordex_domain"]
-
+    if not suggested_domains:
         raise ValueError(
-            f"Bounding box {user_bbox} is not within '{cordex_domain}'. Suggested domain: '{suggested_domain}'."
+            f"The bounding box {user_bbox} is outside of all available CORDEX domains."
         )
+
+    raise ValueError(
+        f"Bounding box {user_bbox} is not within '{cordex_domain}'. Suggested domain: '{suggested_domains[0]}'."
+    )
