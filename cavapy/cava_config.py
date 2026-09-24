@@ -16,6 +16,8 @@ logger = logging.getLogger("climate")
 # Progress messages are part of the tool's UX, so a console handler is attached
 # by default -- but only when the host application has not already configured
 # this logger, and without touching handlers installed by the host.
+# propagate is turned off in that case so each record is emitted once. Importing
+# cavapy loads xclim, whose logging.info() calls install a root handler.
 if not logger.handlers:
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
@@ -24,6 +26,7 @@ if not logger.handlers:
     )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+    logger.propagate = False
     logger.setLevel(logging.INFO)
 
 VARIABLES_MAP = {

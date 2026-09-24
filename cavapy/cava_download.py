@@ -29,6 +29,9 @@ SPATIAL_COORDS = {
     "latitude": "ylim",
 }
 
+# Keep OPeNDAP reads lazy until after time subsetting; empty chunks={} is not enough.
+TIME_CHUNKS = {"time": 365}
+
 
 def _normalize_longitude_coordinate(data: xr.DataArray) -> xr.DataArray:
     """Normalize 0-360 longitude coordinates to -180..180 for bbox selection."""
@@ -468,9 +471,9 @@ def _download_data(
             try:
                 if attempt < retries:
                     with _suppress_stderr_fd():
-                        ds = xr.open_dataset(url_or_path)
+                        ds = xr.open_dataset(url_or_path, chunks=TIME_CHUNKS)
                 else:
-                    ds = xr.open_dataset(url_or_path)
+                    ds = xr.open_dataset(url_or_path, chunks=TIME_CHUNKS)
                 if not ds.data_vars:
                     raise ValueError("Dataset opened with no data variables")
                 return ds
@@ -500,31 +503,9 @@ def _download_data(
             ds_var = ds_var.sortby(ds_var.longitude)
             ds_cropped = _select_spatial_subset(ds_var, bbox, log)
 
-            # Unit conversion
-            if var in ["t2mx", "t2mn", "t2m"]:
-                ds_cropped -= 273.15  # Convert from Kelvin to Celsius
-                ds_cropped.attrs["units"] = "°C"
-            elif var == "tp":
-                ds_cropped *= 1000  # Convert precipitation
-                ds_cropped.attrs["units"] = "mm"
-            elif var == "ssrd":
-                ds_cropped /= 86400  # Convert from J/m^2 to W/m^2
-                ds_cropped.attrs["units"] = "W m-2"
-            elif var == "sfcwind":
-                ds_cropped = ds_cropped * (
-                    4.87 / np.log((67.8 * 10) - 5.42)
-                )  # Convert wind speed from 10 m to 2 m
-                ds_cropped.attrs["units"] = "m s-1"
-
-            # Select years
             years = [int(year) for year in years_obs]
             if not years:
                 raise ValueError("years_obs cannot be empty")
-            year_min = min(years)
-            year_max = max(years)
-            time_mask = (ds_cropped["time"].dt.year >= year_min) & (
-                ds_cropped["time"].dt.year <= year_max
-            )
 
         else:
             ds = _open_dataset_with_retry(url)
@@ -546,28 +527,21 @@ def _download_data(
             log.info("Connection established")
             ds_cropped = _select_spatial_subset(ds_var, bbox, log)
 
-            # Unit conversion
-            if variable in ["tas", "tasmax", "tasmin"]:
-                ds_cropped -= 273.15  # Convert from Kelvin to Celsius
-                ds_cropped.attrs["units"] = "°C"
-            elif variable == "pr":
-                ds_cropped *= 86400  # Convert from kg m^-2 s^-1 to mm/day
-                ds_cropped.attrs["units"] = "mm"
-            elif variable == "rsds":
-                ds_cropped.attrs["units"] = "W m-2"
-            elif variable == "sfcWind":
-                ds_cropped = ds_cropped * (
-                    4.87 / np.log((67.8 * 10) - 5.42)
-                )  # Convert wind speed from 10 m to 2 m
-                ds_cropped.attrs["units"] = "m s-1"
-
-            # Select years based on rcp
             if "rcp" in url:
                 years = [x for x in range(2006, years_up_to + 1)]
             else:
                 years = [x for x in DEFAULT_YEARS_OBS]
 
-            # Add missing dates
+        year_min = min(years)
+        year_max = max(years)
+        time_mask = (ds_cropped["time"].dt.year >= year_min) & (
+            ds_cropped["time"].dt.year <= year_max
+        )
+        ds_cropped = ds_cropped.sel(time=time_mask)
+        if ds_cropped["time"].size == 0:
+            raise ValueError("Empty time axis after subsetting")
+
+        if not obs:
             try:
                 ds_cropped = ds_cropped.convert_calendar(
                     calendar="gregorian", missing=np.nan, align_on="date"
@@ -586,14 +560,35 @@ def _download_data(
                 else:
                     raise
 
-            time_mask = (ds_cropped["time"].dt.year >= years[0]) & (
-                ds_cropped["time"].dt.year <= years[-1]
-            )
-
-        # subset years
-        ds_cropped = ds_cropped.sel(time=time_mask)
-        if ds_cropped["time"].size == 0:
-            raise ValueError("Empty time axis after subsetting")
+        if obs:
+            if var in ["t2mx", "t2mn", "t2m"]:
+                ds_cropped -= 273.15  # Convert from Kelvin to Celsius
+                ds_cropped.attrs["units"] = "°C"
+            elif var == "tp":
+                ds_cropped *= 1000  # Convert precipitation
+                ds_cropped.attrs["units"] = "mm"
+            elif var == "ssrd":
+                ds_cropped /= 86400  # Convert from J/m^2 to W/m^2
+                ds_cropped.attrs["units"] = "W m-2"
+            elif var == "sfcwind":
+                ds_cropped = ds_cropped * (
+                    4.87 / np.log((67.8 * 10) - 5.42)
+                )  # Convert wind speed from 10 m to 2 m
+                ds_cropped.attrs["units"] = "m s-1"
+        else:
+            if variable in ["tas", "tasmax", "tasmin"]:
+                ds_cropped -= 273.15  # Convert from Kelvin to Celsius
+                ds_cropped.attrs["units"] = "°C"
+            elif variable == "pr":
+                ds_cropped *= 86400  # Convert from kg m^-2 s^-1 to mm/day
+                ds_cropped.attrs["units"] = "mm"
+            elif variable == "rsds":
+                ds_cropped.attrs["units"] = "W m-2"
+            elif variable == "sfcWind":
+                ds_cropped = ds_cropped * (
+                    4.87 / np.log((67.8 * 10) - 5.42)
+                )  # Convert wind speed from 10 m to 2 m
+                ds_cropped.attrs["units"] = "m s-1"
 
         assert isinstance(ds_cropped, xr.DataArray)
         return ds_cropped, years
