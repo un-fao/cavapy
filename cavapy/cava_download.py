@@ -29,10 +29,6 @@ SPATIAL_COORDS = {
     "latitude": "ylim",
 }
 
-# Keep OPeNDAP reads lazy until after time subsetting; empty chunks={} is not enough.
-TIME_CHUNKS = {"time": 365}
-
-
 def _normalize_longitude_coordinate(data: xr.DataArray) -> xr.DataArray:
     """Normalize 0-360 longitude coordinates to -180..180 for bbox selection."""
     if "longitude" not in data.coords:
@@ -471,9 +467,9 @@ def _download_data(
             try:
                 if attempt < retries:
                     with _suppress_stderr_fd():
-                        ds = xr.open_dataset(url_or_path, chunks=TIME_CHUNKS)
+                        ds = xr.open_dataset(url_or_path)
                 else:
-                    ds = xr.open_dataset(url_or_path, chunks=TIME_CHUNKS)
+                    ds = xr.open_dataset(url_or_path)
                 if not ds.data_vars:
                     raise ValueError("Dataset opened with no data variables")
                 return ds
@@ -589,6 +585,10 @@ def _download_data(
                     4.87 / np.log((67.8 * 10) - 5.42)
                 )  # Convert wind speed from 10 m to 2 m
                 ds_cropped.attrs["units"] = "m s-1"
+
+        # Fetch only the requested years, inside the retry loop; downstream
+        # time-core operations (interpolate_na, bias correction) need it in memory.
+        ds_cropped = ds_cropped.load()
 
         assert isinstance(ds_cropped, xr.DataArray)
         return ds_cropped, years
