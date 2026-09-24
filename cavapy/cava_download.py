@@ -590,6 +590,10 @@ def _download_data(
                 )  # Convert wind speed from 10 m to 2 m
                 ds_cropped.attrs["units"] = "m s-1"
 
+        # Fetch only the requested years, inside the retry loop; downstream
+        # time-core operations (interpolate_na, bias correction) need it in memory.
+        ds_cropped = ds_cropped.load()
+
         assert isinstance(ds_cropped, xr.DataArray)
         return ds_cropped, years
 
