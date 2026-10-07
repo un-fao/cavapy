@@ -47,6 +47,12 @@ A single `get_climate_data()` call orchestrates a full pipeline:
 | **Bias correction** | ERA5 is automatically fetched as the reference; EQM is trained and applied — no external tools needed |
 | **Domain validation** | If your bounding box falls outside the chosen CORDEX domain, a corrected domain is suggested |
 
+Unit conversion is enabled by default for backward compatibility. Pass
+`convert_units=False` to keep the values and `units` metadata provided by the
+source (for example, temperature in kelvin). This option cannot be combined
+with `bias_correction=True`, because raw ERA5 and CORDEX units are not directly
+compatible for every variable.
+
 ---
 
 ## Data Coverage

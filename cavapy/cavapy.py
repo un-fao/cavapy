@@ -116,6 +116,7 @@ def _get_climate_data_single(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
     remote: bool = True,
+    convert_units: bool = True,
     variables: list[str] | None = None,
     num_processes: int = len(VALID_VARIABLES),
     max_threads_per_process: int = 3,
@@ -186,6 +187,11 @@ def _get_climate_data_single(
             "Cannot apply bias_correction=True when using dataset='CORDEX-CORE-BC'. "
             "The CORDEX-CORE-BC dataset is already bias-corrected using ISIMIP methodology."
         )
+    if bias_correction and not convert_units:
+        raise ValueError(
+            "convert_units=False cannot be used with bias_correction=True because "
+            "ERA5 and CORDEX source units are not directly compatible."
+        )
     
     # Validate variables if provided
     if variables is not None:
@@ -234,6 +240,7 @@ def _get_climate_data_single(
                     bias_correction=bias_correction,
                     historical=historical,
                     remote=remote,
+                    convert_units=convert_units,
                     dataset=dataset,
                 )
             except Exception as exc:
@@ -262,6 +269,7 @@ def _get_climate_data_single(
                         "bias_correction": bias_correction,
                         "historical": historical,
                         "remote": remote,
+                        "convert_units": convert_units,
                         "dataset": dataset,
                     },
                 )
@@ -350,6 +358,7 @@ def get_climate_data(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
     remote: bool = True,
+    convert_units: bool = True,
     variables: list[str] | None = None,
     num_processes: int = len(VALID_VARIABLES),
     max_threads_per_process: int = 3,
@@ -391,6 +400,8 @@ def get_climate_data(
     xlim (tuple or None): Longitudinal bounds of the region of interest. Use only when country is None (default: None).
     ylim (tuple or None): Latitudinal bounds of the region of interest. Use only when country is None (default: None).
     remote (bool): Flag to work with remote data or not (default: True).
+    convert_units (bool): Whether to convert source data to cavapy's standard units.
+        Set to False to preserve the values and units stored by the source (default: True).
     variables (list[str] or None): List of variables to process. Must be a subset of {VALID_VARIABLES}. If None, all variables are processed. (default: None).
     num_processes (int): Number of processes to use, one per variable for a single combo.
         If num_processes <= 1 or only one variable is requested, variables run sequentially.
@@ -425,6 +436,7 @@ def get_climate_data(
             xlim=xlim,
             ylim=ylim,
             remote=remote,
+            convert_units=convert_units,
             variables=variables,
             num_processes=num_processes,
             max_threads_per_process=max_threads_per_process,
@@ -451,6 +463,11 @@ def get_climate_data(
         raise ValueError(
             "Cannot apply bias_correction=True when using dataset='CORDEX-CORE-BC'. "
             "The CORDEX-CORE-BC dataset is already bias-corrected using ISIMIP methodology."
+        )
+    if bias_correction and not convert_units:
+        raise ValueError(
+            "convert_units=False cannot be used with bias_correction=True because "
+            "ERA5 and CORDEX source units are not directly compatible."
         )
 
     if years_up_to is None:
@@ -483,6 +500,7 @@ def get_climate_data(
             xlim=xlim,
             ylim=ylim,
             remote=remote,
+            convert_units=convert_units,
             variables=variables,
             num_processes=num_processes,
             max_threads_per_process=max_threads_per_process,
@@ -535,6 +553,7 @@ def get_climate_data(
         "bias_correction": bias_correction,
         "historical": historical,
         "remote": remote,
+        "convert_units": convert_units,
         "dataset": dataset,
         "retry_log_level": retry_log_level,
     }

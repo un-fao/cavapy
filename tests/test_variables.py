@@ -86,3 +86,37 @@ class TestVariables(unittest.TestCase):
             )
 
         self.assertEqual(calls[0]["buffer"], 2)
+
+    def test_main_api_forwards_convert_units(self):
+        import cavapy
+
+        cavapy_module = importlib.import_module("cavapy.cavapy")
+        calls = []
+
+        def fake_process_worker(*args, **kwargs):
+            calls.append(kwargs)
+            return "processed"
+
+        with (
+            patch.object(cavapy_module, "_show_startup_announcements", lambda: None),
+            patch.object(cavapy_module, "_validate_urls", lambda *args, **kwargs: None),
+            patch.object(
+                cavapy_module,
+                "_geo_localize",
+                lambda *args, **kwargs: {"xlim": (0.0, 1.0), "ylim": (0.0, 1.0)},
+            ),
+            patch.object(cavapy_module, "process_worker", fake_process_worker),
+        ):
+            cavapy.get_climate_data(
+                country="Togo",
+                variables=["tas"],
+                cordex_domain="AFR-22",
+                rcp="rcp26",
+                gcm="MPI",
+                rcm="REMO",
+                years_up_to=2030,
+                convert_units=False,
+                num_processes=1,
+            )
+
+        self.assertFalse(calls[0]["convert_units"])
