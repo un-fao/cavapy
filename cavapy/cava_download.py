@@ -242,6 +242,7 @@ def _climate_data_for_variable(
     bias_correction: bool,
     historical: bool,
     remote: bool,
+    convert_units: bool = True,
     dataset: str = "CORDEX-CORE",
     retry_log_level: int = logging.WARNING,
 ) -> xr.DataArray:
@@ -262,6 +263,7 @@ def _climate_data_for_variable(
             gcm=gcm,
             rcm=rcm,
             rcp=rcp,
+            convert_units=convert_units,
             retry_log_level=retry_log_level,
         )
 
@@ -292,6 +294,7 @@ def _climate_data_for_variable(
             gcm=gcm,
             rcm=rcm,
             rcp=rcp,
+            convert_units=convert_units,
             retry_log_level=retry_log_level,
         )
         downloaded_models = list(
@@ -412,6 +415,7 @@ def _download_data(
     gcm: str,
     rcm: str,
     rcp: str,
+    convert_units: bool = True,
     retry_log_level: int = logging.WARNING,
 ) -> xr.DataArray:
     """Download a dataset, subset it to the bbox, and perform unit/calendar handling."""
@@ -556,35 +560,36 @@ def _download_data(
                 else:
                     raise
 
-        if obs:
-            if var in ["t2mx", "t2mn", "t2m"]:
-                ds_cropped -= 273.15  # Convert from Kelvin to Celsius
-                ds_cropped.attrs["units"] = "°C"
-            elif var == "tp":
-                ds_cropped *= 1000  # Convert precipitation
-                ds_cropped.attrs["units"] = "mm"
-            elif var == "ssrd":
-                ds_cropped /= 86400  # Convert from J/m^2 to W/m^2
-                ds_cropped.attrs["units"] = "W m-2"
-            elif var == "sfcwind":
-                ds_cropped = ds_cropped * (
-                    4.87 / np.log((67.8 * 10) - 5.42)
-                )  # Convert wind speed from 10 m to 2 m
-                ds_cropped.attrs["units"] = "m s-1"
-        else:
-            if variable in ["tas", "tasmax", "tasmin"]:
-                ds_cropped -= 273.15  # Convert from Kelvin to Celsius
-                ds_cropped.attrs["units"] = "°C"
-            elif variable == "pr":
-                ds_cropped *= 86400  # Convert from kg m^-2 s^-1 to mm/day
-                ds_cropped.attrs["units"] = "mm"
-            elif variable == "rsds":
-                ds_cropped.attrs["units"] = "W m-2"
-            elif variable == "sfcWind":
-                ds_cropped = ds_cropped * (
-                    4.87 / np.log((67.8 * 10) - 5.42)
-                )  # Convert wind speed from 10 m to 2 m
-                ds_cropped.attrs["units"] = "m s-1"
+        if convert_units:
+            if obs:
+                if var in ["t2mx", "t2mn", "t2m"]:
+                    ds_cropped -= 273.15  # Convert from Kelvin to Celsius
+                    ds_cropped.attrs["units"] = "°C"
+                elif var == "tp":
+                    ds_cropped *= 1000  # Convert precipitation
+                    ds_cropped.attrs["units"] = "mm"
+                elif var == "ssrd":
+                    ds_cropped /= 86400  # Convert from J/m^2 to W/m^2
+                    ds_cropped.attrs["units"] = "W m-2"
+                elif var == "sfcwind":
+                    ds_cropped = ds_cropped * (
+                        4.87 / np.log((67.8 * 10) - 5.42)
+                    )  # Convert wind speed from 10 m to 2 m
+                    ds_cropped.attrs["units"] = "m s-1"
+            else:
+                if variable in ["tas", "tasmax", "tasmin"]:
+                    ds_cropped -= 273.15  # Convert from Kelvin to Celsius
+                    ds_cropped.attrs["units"] = "°C"
+                elif variable == "pr":
+                    ds_cropped *= 86400  # Convert from kg m^-2 s^-1 to mm/day
+                    ds_cropped.attrs["units"] = "mm"
+                elif variable == "rsds":
+                    ds_cropped.attrs["units"] = "W m-2"
+                elif variable == "sfcWind":
+                    ds_cropped = ds_cropped * (
+                        4.87 / np.log((67.8 * 10) - 5.42)
+                    )  # Convert wind speed from 10 m to 2 m
+                    ds_cropped.attrs["units"] = "m s-1"
 
         # Fetch only the requested years, inside the retry loop; downstream
         # time-core operations (interpolate_na, bias correction) need it in memory.
@@ -615,12 +620,14 @@ def _download_data(
         raise last_exc
 
     if obs:
+        unit_handling = "unit conversion" if convert_units else "source units retained"
         log.info(
-            f"ERA5 data for {variable} has been processed: unit conversion ({ds_cropped.attrs.get('units', 'unknown units')}), time selection ({min(years)}-{max(years)})"
+            f"ERA5 data for {variable} has been processed: {unit_handling} ({ds_cropped.attrs.get('units', 'unknown units')}), time selection ({min(years)}-{max(years)})"
         )
     else:
+        unit_handling = "unit conversion" if convert_units else "source units retained"
         log.info(
-            f"CORDEX data for {variable} has been processed: unit conversion ({ds_cropped.attrs.get('units', 'unknown units')}), calendar transformation (360-day to Gregorian), time selection ({years[0]}-{years[-1]})"
+            f"CORDEX data for {variable} has been processed: {unit_handling} ({ds_cropped.attrs.get('units', 'unknown units')}), calendar transformation (360-day to Gregorian), time selection ({years[0]}-{years[-1]})"
         )
 
     return ds_cropped
